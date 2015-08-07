@@ -1,0 +1,623 @@
+---
+title: "STA380-Section2-Exercises01"
+author: "Bob Cook"
+date: "August 7, 2015"
+output: word_document
+---
+
+## (1)Exploratory Analysis: Georgia Voting
+
+```{r, echo=FALSE}
+georgia = read.csv('C:/Users/Bob/Downloads/georgia2000.csv')
+attach(georgia)
+names(georgia)
+```
+
+
+The first thing that needs to be done with the Georgia voting dataset is to create a variable undercount that takes the difference between ballots cast and votes recorded in each county:
+
+```{r}
+undercount <- georgia$ballots-georgia$votes
+```
+
+This variable will be problematic, however, because more populous counties will likely have larger absolute levels of undercount. So, a normalized undercount variable will be more useful because it will give a better notion of the rate of undercount within a given county:
+```{r}
+norm_undercount <- undercount/ballots
+```
+
+Now that I have the variables I want to work with, the first question is to investigate whether there is any relationship between the type of voting equipment used and the rate of undercount.
+I started by creating a linear model between the two, and viewing the summary statistics:
+
+```{r}
+lm_uc_equip = lm(norm_undercount~equip) 
+summary(lm_uc_equip)
+```
+
+The p-values for each of the predictive variables are far too high to conclude that any has a significant relationship with the undercount rate. The r-squared is also very low, indicating that the equipment variable does very little to explain the variability in undercount rates.
+To further investigate, we can look at a boxplot of each equipment type:
+```{r, echo=FALSE}
+boxplot(norm_undercount ~ equip, data=georgia,
+        xlab = 'equip type',
+        ylab = 'norm_undercount')
+```
+
+In general, this boxplot supports the linear model in asserting that different equipment is not associated with different undercount rates.
+Importantly, however, there appear to be two outliers associated with the optical equipment, and both had extremely high rates of undercount. To identify these, I used the identify() function.
+
+These two outliers turned out to be counties 9 and 120. Interestingly, both of these counties are coded as poor by the metric we are using. Also, county 9 (Ben Hill) has an average percentage of African-Americans compared to all counties, and county 120 (Randolph) has a very high percentage of African-Americans.
+Despite these two outliers, there is not conclusive evidence that there is a relationship between equipment type and undercount rate.
+
+To investigate if poor and minority communities are disproportionately affected by undercounts, I began with a scatterplot matrix:
+
+```{r}
+pairs(~norm_undercount + poor + perAA)                
+
+```
+It is impossible to tell anything conclusively from the matrix, but it appears that there may be some interesting things to look at. We'll start with a look at the relationship between percent of African Americans in the county and the undercount rate with a linear model:
+
+```{r}
+lm_uc_AA = lm(norm_undercount~perAA)                    
+summary(lm_uc_AA)
+```
+
+The summary shows a significantly low p-value of 0.00359 for the perAA variable, so let's look at a scatterplot with a fitted regression line:
+
+```{r, echo=FALSE}
+plot(perAA, norm_undercount)
+abline(lm_uc_AA)
+```
+
+As the linear model suggested, there appears to be a linear relationship between the percentage of African Americans in the county and that county's rate of undercount. I would conclude that African Americans are therefore disparately effected by undercounts.
+To investigate the effect on poor communities, let's start with a regression using poor as the predictor variable. This again produces a significantly low p-value, and an r-squared that is higher than when perAA was used.
+Since poor is a categorical variable, a boxplot should give us a good feel for the poor variable's effect:
+
+```{r, echo=FALSE}
+boxplot(norm_undercount ~ poor, data=georgia,         
+        xlab='poor?',
+        ylab='Normalized undercount')
+```
+
+And the mean and standard deviation associated with this boxplot:
+
+```{r}
+with(georgia, tapply(norm_undercount, poor, mean))
+with(georgia, tapply(norm_undercount, poor, sd))
+
+```
+
+So, as with minorities, poor counties seem to be disproportionately affected by undercounts.
+Finally, to look into a possible relationship between the variables, I ran a multiple regression using both perAA and poor as predictors:
+
+```{r}
+lm_uc_both = lm(norm_undercount~perAA + poor)                    
+summary(lm_uc_both)
+```
+
+Interestingly, the perAA variable is now no longer at a significant p-level, but the poor variable still is. So it appears whether or not a county is poor does more to describe the variability in the undercount rate than the percentage of African Americans does.
+However, I still feel that it is clear that both minorities and poor communities are disparately impacted by undercounts, even though the poor variable is a better predictor of undercount rate.
+
+
+
+
+
+
+
+##(2) Bootstrapping: Yahoo Stocks
+
+```{r, echo=FALSE}
+library(mosaic)
+library(fImport)
+library(foreach)
+
+ETFstocks = c("SPY", "TLT", "LQD", "EEM", "VNQ")
+ETFprices = yahooSeries(ETFstocks, from='2011-08-01')
+#head(ETFprices)
+```
+
+
+After loading the appropriate librairies, the first thing I did was to identify the helper function that takes a price series from yahoo and gives the percent returns:
+
+```{r}
+YahooPricesToReturns = function(series) {
+  mycols = grep('Adj.Close', colnames(series))
+  closingprice = series[,mycols]
+  N = nrow(closingprice)
+  percentreturn = as.data.frame(closingprice[2:N,]) / as.data.frame(closingprice[1:(N-1),]) - 1
+  mynames = strsplit(colnames(percentreturn), '.', fixed=TRUE)
+  mynames = lapply(mynames, function(x) return(paste0(x[1], ".PctReturn")))
+  colnames(percentreturn) = mynames
+  as.matrix(na.omit(percentreturn))
+}
+```
+
+To get a feel for the risk and return properties for the individual asset classes, I ran a bootstrap simulation using only each individual ETF, yielding 5 different values for the mean profit and standard deviation of profit from the stock. This provides a good initial statistic of the return and associated risk of each stock, calculated from an initial total wealth of $10,000. Here is one example, for SPY:
+
+```{r}
+set.seed(123)
+singlestock=c('SPY')
+singleprices = yahooSeries(singlestock, from='2010-08-01')
+singlereturns = YahooPricesToReturns(singleprices)
+return.today = resample(singlereturns, 1, orig.ids=FALSE)
+sim_single = foreach(i=1:500, .combine='rbind') %do% {
+  totalwealth = 10000
+  weights = c(1.0)
+  holdings = weights * totalwealth
+  n_days=10
+  wealthtracker = rep(0, n_days) # Set up a placeholder to track total wealth
+  for(today in 1:n_days) {
+    return.today = resample(singlereturns, 1, orig.ids=FALSE)
+    holdings = holdings + holdings*return.today
+    totalwealth = sum(holdings)
+    wealthtracker[today] = totalwealth
+  }
+  wealthtracker
+}
+
+mean(sim_single); sd(sim_single)
+```
+
+I repeated this process for each individual stock, producing the following outputs:
+For TLT:
+
+```{r, echo=FALSE}
+set.seed(123)
+singlestock=c('TLT')
+singleprices = yahooSeries(singlestock, from='2010-08-01')
+singlereturns = YahooPricesToReturns(singleprices)
+return.today = resample(singlereturns, 1, orig.ids=FALSE)
+sim_single = foreach(i=1:500, .combine='rbind') %do% {
+  totalwealth = 10000
+  weights = c(1.0)
+  holdings = weights * totalwealth
+  n_days=10
+  wealthtracker = rep(0, n_days) # Set up a placeholder to track total wealth
+  for(today in 1:n_days) {
+    return.today = resample(singlereturns, 1, orig.ids=FALSE)
+    holdings = holdings + holdings*return.today
+    totalwealth = sum(holdings)
+    wealthtracker[today] = totalwealth
+  }
+  wealthtracker
+}
+
+mean(sim_single); sd(sim_single)
+```
+
+LQD:
+```{r, echo=FALSE}
+set.seed(123)
+singlestock=c('LQD')
+singleprices = yahooSeries(singlestock, from='2010-08-01')
+singlereturns = YahooPricesToReturns(singleprices)
+return.today = resample(singlereturns, 1, orig.ids=FALSE)
+sim_single = foreach(i=1:500, .combine='rbind') %do% {
+  totalwealth = 10000
+  weights = c(1.0)
+  holdings = weights * totalwealth
+  n_days=10
+  wealthtracker = rep(0, n_days) # Set up a placeholder to track total wealth
+  for(today in 1:n_days) {
+    return.today = resample(singlereturns, 1, orig.ids=FALSE)
+    holdings = holdings + holdings*return.today
+    totalwealth = sum(holdings)
+    wealthtracker[today] = totalwealth
+  }
+  wealthtracker
+}
+
+mean(sim_single); sd(sim_single)
+```
+
+EEM:
+```{r, echo=FALSE}
+set.seed(123)
+singlestock=c('EEM')
+singleprices = yahooSeries(singlestock, from='2010-08-01')
+singlereturns = YahooPricesToReturns(singleprices)
+return.today = resample(singlereturns, 1, orig.ids=FALSE)
+sim_single = foreach(i=1:500, .combine='rbind') %do% {
+  totalwealth = 10000
+  weights = c(1.0)
+  holdings = weights * totalwealth
+  n_days=10
+  wealthtracker = rep(0, n_days) # Set up a placeholder to track total wealth
+  for(today in 1:n_days) {
+    return.today = resample(singlereturns, 1, orig.ids=FALSE)
+    holdings = holdings + holdings*return.today
+    totalwealth = sum(holdings)
+    wealthtracker[today] = totalwealth
+  }
+  wealthtracker
+}
+
+mean(sim_single); sd(sim_single)
+```
+
+And VNQ:
+```{r, echo=FALSE}
+set.seed(123)
+singlestock=c('VNQ')
+singleprices = yahooSeries(singlestock, from='2010-08-01')
+singlereturns = YahooPricesToReturns(singleprices)
+return.today = resample(singlereturns, 1, orig.ids=FALSE)
+sim_single = foreach(i=1:500, .combine='rbind') %do% {
+  totalwealth = 10000
+  weights = c(1.0)
+  holdings = weights * totalwealth
+  n_days=10
+  wealthtracker = rep(0, n_days) # Set up a placeholder to track total wealth
+  for(today in 1:n_days) {
+    return.today = resample(singlereturns, 1, orig.ids=FALSE)
+    holdings = holdings + holdings*return.today
+    totalwealth = sum(holdings)
+    wealthtracker[today] = totalwealth
+  }
+  wealthtracker
+}
+
+mean(sim_single); sd(sim_single)
+```
+
+
+We can also histograms for each stock. For example, this is the one for SPY, which shows the frequency of several ranges of final values of the stock after each simulation:
+```{r, echo=FALSE}
+hist(sim_single[,n_days])
+```
+
+
+Next, I ranked each of the 5 stocks by mean and sd of this simulation (below). This gave me an understanding of the risk and return of each stock in relation to each other, which would be important in balancing the portfolio later on. It is important to note that after taking the large standard deviations into account, only EEM and LQD significantly stood out from the rest. It would not be useful to trust a large part of this ranking due to the changes from one simulation to the next.
+
+Mean (high to low):
+1: EEM
+2: VNQ
+3: TLT
+4: SPY
+5: LQD
+
+SD (high to low):
+1: EEM
+2: LQD
+3: TLT
+4: VNQ
+5: SPY
+
+The two that stood out were EEM and LQD. EEM had a much larger mean profit and mean sd than the others, indicating that it would be a high risk but with the possibility of high reward. LQD had a very low sd compared to the others, so it should figure prominently in a safe portfolio.
+
+
+Next, I ran the bootstrap for a portfolio that had an even 20% split of these five stocks, producing the following mean and sd:
+
+```{r}
+split_stocks = c("SPY", "TLT", "LQD", "EEM", "VNQ")
+split_prices = yahooSeries(split_stocks, from='2010-08-01')
+split_returns = YahooPricesToReturns(split_prices)
+set.seed(15)
+sim_split = foreach(i=1:500, .combine='rbind') %do% {
+  totalwealth = 100000
+  weights = c(0.2, 0.2, 0.2, 0.2, 0.2)
+  holdings = weights * totalwealth
+  n_days = 20
+  wealthtracker = rep(0, n_days) # Set up a placeholder to track total wealth
+  for(today in 1:n_days) {
+    return.today = resample(split_returns, 1, orig.ids=FALSE)
+    holdings = holdings + holdings*return.today
+    totalwealth = sum(holdings)
+    wealthtracker[today] = totalwealth
+  }
+  wealthtracker
+}
+
+mean(sim_split); sd(sim_split)
+```
+
+And this histogram of profit/loss:
+
+```{r, echo=FALSE}
+hist(sim_split[,n_days]- 100000, 20)
+
+```
+
+The 4-week value at risk at the 5% level associated with this portfolio is:
+
+```{r}
+quantile(sim_split[,n_days], 0.05) - 100000
+
+```
+This tells us that there is a 5% chance that this portfolio will create a loss of $3461.65 or more over the next 4 weeks (20 trading days).
+
+To choose a safe portfolio, I felt it would be important to include LQD to a large extent because it had a much lower standard deviation than the other stocks in the individual simulations. I settled on a safe portfolio with a 10%-80%-10% distribution of SPY, LQD, and EEM stocks, respectively. The reason I included EEM, despite its high risk, is that on average it outperformed the other stocks, and balancing it with a much higher percentage of the low-risk LQD stock should help negate its risks:
+
+```{r}
+safe_stocks = c("SPY", "LQD", "EEM")
+safe_prices = yahooSeries(safe_stocks, from='2010-08-01')
+safe_returns = YahooPricesToReturns(safe_prices)
+set.seed(123)
+sim_safe = foreach(i=1:500, .combine='rbind') %do% {
+  totalwealth = 100000
+  weights = c(0.1,0.8,0.1)
+  holdings = weights * totalwealth
+  n_days = 20
+  wealthtracker = rep(0, n_days) # Set up a placeholder to track total wealth
+  for(today in 1:n_days) {
+    return.today = resample(safe_returns, 1, orig.ids=FALSE)
+    holdings = holdings + holdings*return.today
+    totalwealth = sum(holdings)
+    wealthtracker[today] = totalwealth
+  }
+  wealthtracker
+}
+
+mean(sim_safe); sd(sim_safe)
+```
+
+And the histogram of its profit/loss balance:
+```{r, echo=FALSE}
+hist(sim_safe[,n_days]- 100000, 20)
+
+```
+
+And 5% Value at Risk, indicating the level of loss that could be reached after 4 weeks, at a 5% probability:
+```{r}
+quantile(sim_safe[,n_days], 0.05) - 100000
+
+```
+
+It is important to note that this loss is significantly less than what was calculated from the 20% split, as expected from a safe portfolio.
+
+Finally, for the aggressive portfolio, I balanced the portfolio with the following distribution:
+20% VNQ, 10% LQD and 70% EEM. This simulation yielded a large standard deviation, as expected, but a lower mean profit than I had hoped:
+```{r}
+agg_stocks = c("VNQ", "LQD", "EEM")
+agg_prices = yahooSeries(agg_stocks, from='2010-08-01')
+agg_returns = YahooPricesToReturns(agg_prices)
+set.seed(123)
+sim_agg = foreach(i=1:500, .combine='rbind') %do% {
+  totalwealth = 100000
+  weights = c(0.2,0.1,0.7)
+  holdings = weights * totalwealth
+  n_days = 20
+  wealthtracker = rep(0, n_days) # Set up a placeholder to track total wealth
+  for(today in 1:n_days) {
+    return.today = resample(agg_returns, 1, orig.ids=FALSE)
+    holdings = holdings + holdings*return.today
+    totalwealth = sum(holdings)
+    wealthtracker[today] = totalwealth
+  }
+  wealthtracker
+}
+mean(sim_agg); sd(sim_agg)
+```
+
+Corresponding to an underwhelming histogram of profit/loss:
+```{r, echo=FALSE}
+hist(sim_agg[,n_days]- 100000, 20)
+
+```
+And a Value at Risk level of $7947.38, much higher than the safe and split portfolios (as expected):
+```{r, echo=FALSE}
+quantile(sim_agg[,n_days], 0.05) - 100000
+
+```
+
+My conclusion is that the reader, under most circumstances, should rule out the aggressive portfolio. Although it has potential for the greatest profits due to the high standard deviation, the combination of lowest mean profit and highest risk makes it unappealing.
+For an investor who can absorb some risk, the 20% split appears to perform very well, and higher on average than the safe and aggressive portfolios.
+  However, if the reader wants primarily to minimize risk, the safe portfolio is likely the best option because it has a standard deviation that is much smaller than the split portfolio, and performs decently well on average.
+
+
+
+
+
+
+##(3) Clustering and PCA: Wine
+
+
+First, we alter the table to only include the chemical properties, and center it:
+```{r}
+wine = read.csv('C:/Users/Bob/Downloads/wine.csv')
+attach(wine)
+names(wine)
+chem_props <- wine[-c(12,13)]
+chem_props_centered = scale(chem_props, center=TRUE, scale=FALSE)
+```
+
+Now, find the first PC:
+```{r}
+pc1 = prcomp(chem_props_centered)
+v_best = pc1$rotation[,1]
+v_best
+alpha_best = chem_props_centered %*% v_best
+```
+
+How much of the total variation is predicted by the first PC?
+```{r}
+var_by_component = apply(chem_props_centered, 2, var)
+var(alpha_best)
+var_by_component
+var(alpha_best)/sum(var_by_component)
+plot(pc1, type='l')
+```
+
+Pretty darn good, the first PC predicts 95.4% of the total variation.
+
+```{r}
+v_second_best = pc1$rotation[,2]
+v_second_best
+
+```
+
+Now, can we plot the reds v. whites using the first 2 PC's?
+
+```{r}
+library(devtools)
+install_github("vqv/ggbiplot")
+library(ggbiplot)
+
+g <- ggbiplot(pc1, obs.scale=1, var.scale=1, groups = color)
+
+print(g)
+```
+
+Yes, PCA revealed the separation between reds and whites in the data.
+
+Can we also see a difference between higher and lower quality wines?
+
+```{r}
+g <- ggbiplot(pc1, obs.scale=1, var.scale=1, groups = quality)
+
+print(g)
+```
+
+This looks a little less revealing... Maybe the wine snobs don't know as much as they think they do.
+
+How does this compare to k-means?
+
+First, scale and center:
+```{r}
+chem_props_scaled <- scale(chem_props, center=TRUE, scale=TRUE)
+
+```
+Now, run k-means and plot with red and white on the axes:
+```{r}
+wine_kmeans <- kmeans(chem_props_scaled, centers=4, nstart=50)
+wine_kmeans$centers
+
+wine_kmeans$totss
+wine_kmeans$withinss
+wine_kmeans$tot.withinss
+
+```
+
+Thus, for k-means, the total sum of squares is 71456, and the sum of sums of squares of all clusters is 40714.72.
+
+For this data set, PCA seems to make more sense, especially visually, because we are able to explain the vast majority of data with the first two PC's, and then can distinguigh red from white pretty readily once we project the points onto the plane created by those first two PC's. PCA was not able to sort the higher from lower quality wines, but this is a subjective criteria. Therefore, I would not expect the same ridged pattern in quality ratings that we see in whether a wine is red or white.
+Overall, it seems that k-means may be more useful for when we are looking for a relationship between variables (e.g. red and white meat in the protein example) because we can plot the clusters on a coordinate with the 2 (or 3 potentially) variables on the axes.
+PCA seems to make more sense when trying to look for a relationship within a variable because we can create a coordinate axis that otherwise would not exist, and look within that plane for a relatinship within the variable we want.
+
+
+
+
+
+##(4): Market Segmentation: Nutrient H2o
+
+This seems like a good situation for clustering because we are looking for market segments that group together in any way, but probably not agglomerative hierarchical clustering because the data set is large. K-means is probably a good starting point, after some initial plots and a figure that may be interesting:
+
+```{r, echo=FALSE}
+nutrient = read.csv('C:/Users/Bob/Downloads/social_marketing.csv')
+attach(nutrient)
+names(nutrient)
+#View(nutrient)
+```
+
+```{r}
+plot(religion, computers)
+plot(home_and_garden, online_gaming)
+plot(online_gaming, health_nutrition)
+plot(personal_fitness, online_gaming)
+lm_rel_comp = lm(computers~religion + religion^2)
+```
+
+The relationship between those tweet a lot about religion and those who tweet a lot about computers looks potentially interesting.
+Let's look further into that using k-means.
+
+First, make all variables numeric.
+```{r, echo=FALSE}
+nutrient$adult = as.numeric(nutrient$adult)
+nutrient$small_business = as.numeric(nutrient$small_business)
+nutrient$fashion = as.numeric(nutrient$fashion)
+nutrient$personal_fitness = as.numeric(nutrient$personal_fitness)
+nutrient$dating = as.numeric(nutrient$dating)
+nutrient$spam = as.numeric(nutrient$spam)
+nutrient$school = as.numeric(nutrient$school)
+nutrient$parenting = as.numeric(nutrient$parenting)
+nutrient$beauty = as.numeric(nutrient$beauty)
+nutrient$religion = as.numeric(nutrient$religion)
+nutrient$art = as.numeric(nutrient$art)
+nutrient$automotive = as.numeric(nutrient$automotive)
+nutrient$crafts = as.numeric(nutrient$crafts)
+nutrient$outdoors = as.numeric(nutrient$outdoors)
+nutrient$business = as.numeric(nutrient$business)
+nutrient$computers = as.numeric(nutrient$computers)
+nutrient$eco = as.numeric(nutrient$eco)
+nutrient$cooking = as.numeric(nutrient$cooking)
+nutrient$sports_playing = as.numeric(nutrient$sports_playing)
+nutrient$college_uni = as.numeric(nutrient$college_uni)
+nutrient$health_nutrition = as.numeric(nutrient$health_nutrition)
+nutrient$shopping = as.numeric(nutrient$shopping)
+nutrient$online_gaming = as.numeric(nutrient$online_gaming)
+nutrient$news = as.numeric(nutrient$news)
+nutrient$music = as.numeric(nutrient$music)
+nutrient$home_and_garden = as.numeric(nutrient$home_and_garden)
+nutrient$family = as.numeric(nutrient$family)
+nutrient$food = as.numeric(nutrient$food)
+nutrient$politics = as.numeric(nutrient$politics)
+nutrient$sports_fandom = as.numeric(nutrient$sports_fandom)
+nutrient$tv_film = as.numeric(nutrient$tv_film)
+nutrient$uncategorized = as.numeric(nutrient$uncategorized)
+nutrient$photo_sharing = as.numeric(nutrient$photo_sharing)
+nutrient$travel = as.numeric(nutrient$travel)
+nutrient$current_events = as.numeric(nutrient$current_events)
+nutrient$chatter = as.numeric(nutrient$chatter)
+
+```
+
+Remove variable X:
+```{r}
+nutrient1 <- nutrient[-c(1)]
+names(nutrient1)
+```
+
+Now, kmeans:
+```{r}
+nutrient_scaled <- scale(nutrient1, center=TRUE, scale=TRUE) 
+
+nutrient_kmeans <- kmeans(nutrient_scaled, centers=3, nstart=50)
+```
+
+Let's plot this with religion on the x-axis and computers on the y:
+```{r}
+plot(nutrient_scaled[,"religion"], nutrient_scaled[,"computers"],
+     type="n", xlab="Religion", ylab="Computers")
+text(nutrient_scaled[,"religion"], nutrient_scaled[,"computers"], labels=colnames(nutrient), col=rainbow(3)[nutrient_kmeans$cluster])
+summary(religion); summary(computers)
+```
+
+
+Out of the three clusters, there appears to be a large separation between those who tweet often about religion, and those who tweet often about computers. If I were to take it too far, I would say there are two types of people: religious people, and computer people. 
+Interestingly, I ran this same code for many other combinations of variables that I believed would be either highly correlated or uncorrelated, and could not find any other plot that looked interesting.
+
+To me, this relationship could go either way. We could say that religion and computers are very different subjects with little overlap, and try to steer clear of any combination of the two. Or, more interestingly, we could look for a way to find a partnership between the two that has not been realized yet. It is clear, given by the fact that there are a large number of tweets about religion (more than one per person on average) that technology is not likely the cause of this discrepancy. Therefore, perhaps the disconnect between computers and religion is only a result of the fact that no one has found a way to take advantage of this potential partnership.
+While moral questions about religion and technology are definitely relevant here, it seems likely that there would be a morally upstanding way to develop a new market segment involving both religion and computer, and that there is little interest in both at the same time right now.
+
+Now, will PCA yield anything interesting about the data?
+
+```{r}
+pc1 = prcomp(nutrient_scaled)
+v_best = pc1$rotation[,1]
+v_best
+alpha_best = nutrient_scaled %*% v_best
+```
+
+How much of the total variation is predicted by the first PC?
+```{r}
+var_by_component = apply(nutrient, 2, var)
+var(alpha_best)
+var_by_component
+var(alpha_best)/sum(var_by_component)
+plot(pc1, type='l')
+```
+
+Not much, and it looks like it would take several PC's to start to be able to predict most of the variance in the original data set.
+I tried several different biplots grouped by many different variables, and all came out to look very similar to this one:
+
+```{r}
+library(devtools)
+install_github("vqv/ggbiplot")
+library(ggbiplot)
+
+g <- ggbiplot(pc1, obs.scale=1, var.scale=1, groups = spam)
+
+print(g)
+```
+
+Although these biplots are saying nothing about individual market segments, they indicate to me that in general, there is a large divide between people who tweet and people who don't.
+Perhaps NutrientH2o can target those who don't tweet and try to get them comfortable and in the habit of tweeting. On the other side of the coin, it may be true that NutrientH2o wants to avoid these customers in the twittersphere because they are unlikely to ever tweet a lot. I would be inclined to look into the former option, and then settle for the latter if further testing supports that one.
+
